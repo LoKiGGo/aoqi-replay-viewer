@@ -1,0 +1,17 @@
+# 回放数据：涉及玩家昵称与阵容，不入库
+*.json
+!package.json
+
+# 生成物（用 build_viewer.py 本地生成）
+/timeline.json
+*_timeline.json
+
+# Python
+__pycache__/
+*.pyc
+
+# 临时 / 调试
+_chk.js
+_dbg*.js
+_msg.txt
+*.tmp

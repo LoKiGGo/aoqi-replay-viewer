@@ -1,0 +1,1749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>奥奇传说 · 对战回放查看器</title>
+<style>
+:root{
+  --bg:#12161d; --bg2:#1a2029; --bg3:#222a35; --line:#2e3947;
+  --fg:#dfe6f0; --fg2:#95a3b8; --fg3:#66748a;
+  --t0:#4dabf7; --t1:#ff8787;
+  --hp:#3ddc84; --hp2:#ffa94d; --hp3:#ff6b6b; --shp:#7aa2f7;
+  --normal:#8b9dc3; --ult:#ffd43b; --pre:#8f7fd4;
+  --dmg:#ff6b6b; --heal:#4dd4ac;
+}
+*{box-sizing:border-box}
+.spacer{flex:1}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font:13px/1.55 "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.num{font-family:ui-monospace,Consolas,"Cascadia Mono",monospace}
+
+/* ---------- 顶栏 ---------- */
+header{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--line);
+}
+.brand{font-weight:700;font-size:14px;letter-spacing:.5px}
+.brand small{font-weight:400;color:var(--fg3);margin-left:6px}
+.meta{color:var(--fg2);font-size:12px}
+.meta b{color:var(--fg);font-weight:600}
+.tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;border:1px solid var(--line);color:var(--fg2)}
+.tag.win{border-color:#2f6b4a;color:#7ee2a8;background:#16301f}
+.tag.lose{border-color:#6b2f2f;color:#ff9d9d;background:#301616}
+.spacer{flex:1}
+button,label.file{
+  background:var(--bg3);color:var(--fg);border:1px solid var(--line);
+  border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit;
+}
+button:hover,label.file:hover{background:#2b3542;border-color:#3d4c5e}
+button:active{transform:translateY(1px)}
+button.on{background:#26405c;border-color:#3a6a9e;color:#cfe6ff}
+input[type=file]{display:none}
+
+/* ---------- 主体两栏（可拖动分隔条调节比例） ---------- */
+main{flex:1;display:flex;min-height:0}
+.col-left{width:520px;min-width:300px;max-width:80vw;display:flex;flex-direction:column;min-height:0}
+.col-right{flex:1;display:flex;flex-direction:column;min-height:0;min-width:280px}
+.resizer{
+  flex:0 0 7px;cursor:col-resize;background:var(--bg2);
+  border-left:1px solid var(--line);border-right:1px solid var(--line);
+  position:relative;user-select:none;
+}
+.resizer::before{
+  content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:3px;height:34px;border-radius:2px;background:#3d4c5e;transition:background .15s;
+}
+.resizer:hover::before,.resizer.on::before{background:#ffd43b}
+.resizer.on{background:#1d2531}
+body.resizing{cursor:col-resize;user-select:none}
+body.resizing iframe,body.resizing *{pointer-events:none}
+body.resizing .resizer{pointer-events:auto}
+
+/* 横向布局下的上下分隔条（调「站位」与「文字战报」的高度比例） */
+.resizer-h{
+  display:none;flex:0 0 7px;cursor:row-resize;background:var(--bg2);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  position:relative;user-select:none;
+}
+.resizer-h::before{
+  content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  height:3px;width:34px;border-radius:2px;background:#3d4c5e;transition:background .15s;
+}
+.resizer-h:hover::before,.resizer-h.on::before{background:#ffd43b}
+.resizer-h.on{background:#1d2531}
+.layout-h .resizer-h{display:block}
+.layout-h.detached .resizer-h{display:none}
+body.resizing-v{cursor:row-resize;user-select:none}
+body.resizing-v .resizer-h{pointer-events:auto}
+body.resizing-v *{pointer-events:none}
+
+/* ---------- 横向布局：双方站位并排，文字战报通栏放下面 ---------- */
+main.layout-h{flex-direction:column}
+.layout-h .col-left{flex:1;width:auto;min-width:0;max-width:none;min-height:0;overflow:hidden}
+.layout-h .resizer{display:none}
+/* 战报高度由 CSS 变量 --log-h 控制，可拖上下分隔条调整 */
+.layout-h .col-right{flex:0 0 var(--log-h,34vh);min-width:0;min-height:0;overflow:hidden;height:var(--log-h,34vh)}
+.layout-h .board{
+  display:flex;flex-direction:row;align-items:flex-start;gap:14px;
+  flex-wrap:nowrap;overflow:auto;min-height:0;
+}
+.layout-h .team-h{white-space:nowrap;overflow:hidden}
+.layout-h #gauges{display:none}
+/* 每个阵营一张卡片；宽度由 JS 按实测容器宽度精确分配（见 fitBoards()），
+   这样可以保证两个棋盘一定并排且不被压扁。 */
+.layout-h .bwrap{
+  flex:0 0 auto;
+  border:1px solid var(--line);border-radius:10px;padding:8px 11px 10px;background:#131922;
+  display:flex;flex-direction:column;
+}
+.layout-h .bwrap .team-h{flex:0 0 auto}
+.layout-h .bwrap .gauges{
+  flex-direction:column;border-bottom:1px solid var(--line);
+  padding:0 0 6px;margin:0 0 7px;
+}
+/* 横向布局要为两个棋盘并排留出空间。
+   格位宽度由卡片宽度三等分决定（卡片宽度由 fitBoards() 按实测容器宽度设定），
+   因此这里不需要写死格宽；只需给一个下限防止被压得过窄。 */
+.layout-h .grid,.layout-h .colhead{min-width:0}
+.layout-h .slot{box-sizing:border-box;min-height:88px;width:100%}
+.layout-h .slot.multi{min-height:132px}
+.layout-h .u{padding:12px 6px 5px;gap:4px}
+.layout-h .u .nm{font-size:11px}
+.layout-h .u .lvl{font-size:9px}
+.layout-h .u .st{font-size:9.5px}
+.layout-h .u .st .k{font-size:9px}
+.layout-h .u .coord .v,.layout-h .u .st.coord{font-size:9px}
+.layout-h .u .badges .badge{font-size:8.5px;padding:0 3px}
+.layout-h .u .d{font-size:9.5px}
+.layout-h .colhead{font-size:9.5px}
+.layout-h .colhead em{font-size:8.5px;letter-spacing:0;margin-left:3px}
+.layout-h .team-h{font-size:11px;gap:7px}
+/* 卡片较窄时进一步收字号（.bwrap 的 data-narrow 由 fitBoards() 设置） */
+.layout-h .bwrap[data-narrow="1"] .u{padding:11px 4px 4px;gap:3px}
+.layout-h .bwrap[data-narrow="1"] .u .nm{font-size:9.5px}
+.layout-h .bwrap[data-narrow="1"] .u .lvl{font-size:8.5px}
+.layout-h .bwrap[data-narrow="1"] .u .st{font-size:8.5px}
+.layout-h .bwrap[data-narrow="1"] .u .st .k{font-size:8px}
+.layout-h .bwrap[data-narrow="1"] .colhead{font-size:8.5px}
+.layout-h .bwrap[data-narrow="1"] .colhead em{font-size:7.5px}
+.layout-h .log{max-height:none;flex:1;min-height:0}
+
+/* ---------- 文字战报「拖出」为浮动窗 ---------- */
+.panel-h{cursor:default}
+.panel-h .tool{
+  cursor:pointer;font-size:11px;padding:1px 7px;border-radius:5px;
+  border:1px solid var(--line);color:var(--fg2);user-select:none;white-space:nowrap;
+}
+.panel-h .tool:hover{background:#232c38;color:var(--fg)}
+.col-right.detached{
+  position:fixed;right:18px;bottom:82px;z-index:70;
+  width:min(640px,92vw);height:min(56vh,520px);
+  background:var(--bg);border:1px solid #3d4c5e;border-radius:10px;
+  box-shadow:0 18px 50px #000c;overflow:hidden;min-width:0;
+}
+.col-right.detached #logHead{cursor:move;background:#1d2531}
+.col-right.detached .log{max-height:none;flex:1;min-height:0}
+/* 浮动窗的缩放手柄：右下角自由缩放 + 右边/下边单向拉伸 */
+.col-right.detached .rz{position:absolute;z-index:3;background:transparent}
+.col-right.detached .rz.se{right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize}
+.col-right.detached .rz.se::after{
+  content:'';position:absolute;right:3px;bottom:3px;width:11px;height:11px;
+  border-right:2px solid #55637a;border-bottom:2px solid #55637a;border-radius:0 0 2px 0;
+}
+.col-right.detached .rz.e{right:0;top:0;bottom:18px;width:6px;cursor:ew-resize}
+.col-right.detached .rz.s{left:0;bottom:0;right:18px;height:6px;cursor:ns-resize}
+.col-right.detached .rz.se:hover::after{border-color:#ffd43b}
+.col-right.detached .rz.e:hover,.col-right.detached .rz.s:hover{background:#ffd43b44}
+/* 战报拖出后，站位区接管腾出的空间（两种布局都适用）；
+   横向布局下棋盘必须解除限宽，否则会挤在左半边显示不全 */
+main:has(.col-right.detached) .col-left{flex:1 1 auto;width:auto!important;max-width:none}
+main:has(.col-right.detached) .board{max-width:760px}
+main.layout-h:has(.col-right.detached) .board{max-width:none}
+body.dragging{cursor:move;user-select:none}
+
+.panel-h{
+  padding:6px 12px;background:var(--bg2);border-bottom:1px solid var(--line);
+  font-size:12px;color:var(--fg2);display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+}
+.panel-h b{color:var(--fg)}
+
+/* ---------- 站位盘 ---------- */
+.board{flex:1;overflow:auto;padding:10px 12px}
+
+/* ---------- 通灵条 ---------- */
+.gauges{
+  border-bottom:1px solid var(--line);background:#161c25;padding:6px 12px 7px;
+  display:flex;flex-direction:column;gap:5px;
+}
+.gauge{display:flex;align-items:center;gap:8px;font-size:11.5px}
+.gauge .who{
+  flex:0 0 auto;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-weight:600;
+}
+.gauge .who.t0{color:var(--t0)}
+.gauge .who.t1{color:var(--t1)}
+.gauge .track{
+  flex:1;height:12px;border-radius:6px;background:#0d1117;position:relative;
+  overflow:hidden;border:1px solid #232c38;
+}
+.gauge .fill{
+  display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#4c6ef5,#7c5cff);
+  transition:width .35s;
+}
+.gauge.full .fill{background:linear-gradient(90deg,#ffd43b,#ff9f1a)}
+.gauge.full .track{border-color:#ffd43b;box-shadow:0 0 8px #ffd43b66}
+.gauge.fired .fill{background:linear-gradient(90deg,#ff9f1a,#ff6b6b)}
+.gauge.fired .track{border-color:#ff9f1a;box-shadow:0 0 10px #ff9f1a88}
+.gauge .num{
+  flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--fg2);
+  min-width:62px;text-align:right;
+}
+.gauge .tagf{
+  flex:0 0 auto;font-size:10px;font-weight:700;padding:0 5px;border-radius:4px;
+  background:#ffd43b;color:#12161d;
+}
+.gauge .tagd{flex:0 0 auto;font-size:10.5px;font-weight:700}
+.gauge .tagd.pos{color:#5ee7b5}
+.gauge .tagd.neg{color:#ff7b7b}
+.gauge .pb{
+  flex:0 0 auto;font-size:10px;color:var(--fg3);font-family:ui-monospace,Consolas,monospace;
+}
+.gauge .ov{color:#ff6b6b}
+.gauges .ghint{font-size:10px;color:var(--fg3)}
+.mir{
+  font-size:10px;padding:0 5px;border-radius:4px;background:#2a2036;color:#c9a9ff;
+  border:1px solid #4a3a63;
+}
+.team-h{
+  display:flex;align-items:center;gap:8px;margin:2px 0 6px;font-size:12px;color:var(--fg2);
+}
+.team-h .dot{width:8px;height:8px;border-radius:50%}
+.team-h .nm{font-weight:700;color:var(--fg)}
+.team-h .rst{margin-left:auto;color:var(--fg3)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.grid.gap{margin-bottom:12px}
+.gridcap{
+  font-size:10.5px;color:var(--fg3);text-align:center;margin-bottom:3px;
+  font-family:ui-monospace,Consolas,monospace;
+}
+/* 列号条：屏幕从左到右依次是 第1列(7 8 9) / 第2列(4 5 6) / 第3列(1 2 3) */
+.colhead{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:0 0 4px;
+  font-size:10px;color:var(--fg3);text-align:center;
+}
+.colhead span{
+  border-bottom:1px dashed #2b3542;padding-bottom:2px;
+  font-family:ui-monospace,Consolas,monospace;
+}
+.colhead em{font-style:normal;color:#55637a;margin-left:4px;letter-spacing:1px}
+.seam{display:flex;align-items:center;gap:10px;margin:2px 0 8px;color:var(--fg3);font-size:11px}
+.seam::before,.seam::after{content:'';flex:1;height:1px;background:var(--line)}
+
+/* 外层：一个九宫格格位（可纵向叠放多个单位） */
+.slot{
+  background:var(--bg2);border:1px solid var(--line);border-radius:8px;
+  display:flex;flex-direction:column;overflow:hidden;min-height:96px;
+}
+.slot.t0{border-left:3px solid var(--t0)}
+.slot.t1{border-left:3px solid var(--t1)}
+.slot.multi{min-height:150px;background:#1c2330}
+.slot.multi .u + .u{border-top:1px dashed var(--line)}
+
+/* 内层：单个单位卡 */
+.u{
+  position:relative;padding:14px 7px 6px;display:flex;flex-direction:column;gap:4px;
+  flex:1;transition:background .18s,box-shadow .18s;
+}
+.u.dead{opacity:.58;background:#181b20}
+.u.dead .nm{text-decoration:line-through;color:#8a95a5}
+.u.emptyhint{align-items:center;justify-content:center;color:#39424f;font-size:11px;padding:6px}
+
+.cell.empty{background:#171c24;border:1px dashed #242d3a;border-radius:8px;color:#39424f;
+  align-items:center;justify-content:center;font-size:11px;display:flex;flex-direction:column;
+  gap:2px;min-height:96px}
+.gzempty{
+  font-size:15px;font-weight:800;color:#2f3a49;
+  font-family:ui-monospace,Consolas,monospace;line-height:1;
+}
+
+/* 出手者 / 承伤者 高亮 */
+.u.atk{background:#2b2712;box-shadow:inset 0 0 0 2px #ffd43b99}
+.u.atk::after{
+  content:'出手';position:absolute;right:5px;top:2px;font-size:10px;font-weight:700;
+  color:#12161d;background:#ffd43b;border-radius:3px;padding:0 4px;
+}
+.u.vic{background:#2b1418;box-shadow:inset 0 0 0 2px #ff6b6b99}
+.u.vic::after{
+  content:'受伤';position:absolute;right:5px;top:2px;font-size:10px;font-weight:700;
+  color:#fff;background:#c92a2a;border-radius:3px;padding:0 4px;
+}
+.u.healed{background:#12241c;box-shadow:inset 0 0 0 2px #4dd4ac99}
+.u.healed::after{
+  content:'治疗';position:absolute;right:5px;top:2px;font-size:10px;font-weight:700;
+  color:#0d1f18;background:#4dd4ac;border-radius:3px;padding:0 4px;
+}
+.u.flash{animation:fl .7s ease-out}
+@keyframes fl{0%{box-shadow:inset 0 0 0 4px #ffd43bcc}100%{box-shadow:none}}
+
+.u .row1{display:flex;align-items:baseline;gap:5px;padding-right:36px}
+.u .gz{
+  font-size:11px;font-weight:800;color:#12161d;background:var(--fg3);
+  border-radius:4px;padding:0 5px;flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;
+}
+.slot.t0 .gz{background:var(--t0)}
+.slot.t1 .gz{background:var(--t1)}
+.u .nm{font-size:12px;font-weight:600;line-height:1.25;word-break:break-all;flex:1}
+.u .lvl{font-size:10px;color:var(--fg3);flex:0 0 auto}
+.u .pos{font-size:9.5px;color:var(--fg3);flex:0 0 auto}
+.bar{height:6px;border-radius:3px;background:#0e1218;overflow:hidden;position:relative}
+.bar>i{display:block;height:100%;background:var(--hp);transition:width .35s}
+.bar>i.warn{background:var(--hp2)}
+.bar>i.crit{background:var(--hp3)}
+.bar.shp{height:4px}
+.bar.shp>i{background:var(--shp)}
+/* 三行分列：气势 / 血量 / 盾 */
+.stats{display:flex;flex-direction:column;gap:1px;margin-top:1px}
+.st{display:flex;align-items:baseline;gap:5px;font-size:11px;line-height:1.4}
+.st .k{
+  flex:0 0 26px;font-size:10px;color:var(--fg3);text-align:right;
+}
+.st .v{
+  flex:1;font-family:ui-monospace,Consolas,"Cascadia Mono",monospace;
+  color:var(--fg2);letter-spacing:.2px;
+}
+.st.hp .v{color:#e6edf7;font-weight:600}
+.st.shp .k{color:#7aa2f7}
+.st.shp .v{color:#a9c6ff}
+.st.vg .k{color:#c9a227}
+.st.vg .v{color:#e8cf7a}
+.st .d{font-size:10px;font-weight:700;flex:0 0 auto}
+.st .d.neg{color:#ff7b7b}
+.st .d.pos{color:#5ee7b5}
+.st.coord .v{color:#4a5666;font-size:10px}
+.u .badges{display:flex;gap:4px;flex-wrap:wrap}
+.badge{font-size:10px;padding:0 5px;border-radius:4px;background:#2a3341;color:var(--fg2)}
+.badge.d{background:#3a1f22;color:#ff9d9d}
+.badge.h{background:#173328;color:#7ee2a8}
+.badge.k{background:#3a2a12;color:#ffd08a}
+.badge.s{background:#1c2a44;color:#a9c6ff}
+.badge.a{background:#2b2140;color:#c3a9ff}
+
+/* ---------- 文字战报 ---------- */
+.log{flex:1;overflow:auto;padding:6px 0}
+.round-h{
+  position:sticky;top:0;z-index:2;background:#1d2531;border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);padding:4px 12px;font-size:12px;color:#cfe0f5;
+  font-weight:700;display:flex;gap:10px;align-items:center;
+}
+.round-h .cnt{font-weight:400;color:var(--fg3)}
+.ev{
+  padding:7px 12px 7px 14px;border-bottom:1px solid #1e2530;cursor:pointer;
+  border-left:3px solid transparent;
+}
+.ev:hover{background:#1b2230}
+.ev.cur{background:#22304a;border-left-color:#ffd43b}
+.ev.pre{color:var(--fg2);font-size:12px}
+.ev .head{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+.ev .who{font-weight:700}
+.ev .who.t0{color:var(--t0)} .ev .who.t1{color:var(--t1)}
+.ev .arrow{color:var(--fg3)}
+.ev .sk{font-weight:700}
+.ev .sk.normal{color:var(--normal)}
+.ev .sk.ult{color:var(--ult)}
+.ev .sk.pre{color:var(--pre)}
+.ev .idx{font-size:10px;color:var(--fg3)}
+.tgs{padding-left:16px;margin-top:2px;display:flex;flex-direction:column;gap:1px}
+.tg{font-size:12px;color:var(--fg2)}
+.tg .tn{color:#c3cfe0}
+.tg .fl{font-size:10.5px;padding:0 4px;border-radius:3px;margin-left:4px}
+.fl.block{background:#3a2a12;color:#ffd08a}
+.fl.crit{background:#3a1f22;color:#ff9d9d}
+.fl.immune{background:#1c2a44;color:#a9c6ff}
+.fl.dodge{background:#123a3a;color:#5ee7e7}
+.fl.miss{background:#242c38;color:#7c8ba1}
+.fl.rev{background:#173328;color:#7ee2a8}
+.tg .dmg{color:var(--dmg);font-weight:600}
+.tg .heal{color:var(--heal);font-weight:600}
+.tg .shpd{color:var(--shp);font-weight:600}
+.tg .rest{color:var(--fg3)}
+.tg .meta{color:var(--fg3);font-size:11px}
+.ev .extra{padding-left:16px;font-size:11px;color:var(--fg3);margin-top:1px}
+
+/* ---------- 底部时间轴 ---------- */
+footer{background:var(--bg2);border-top:1px solid var(--line);padding:8px 12px 10px}
+.tl-top{display:flex;align-items:center;gap:10px;margin-bottom:7px;flex-wrap:wrap}
+.ck{font-size:12px;color:var(--fg2)}
+.ck b{color:#ffd43b}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:linear-gradient(90deg,#2b3542,#3a4a5e)}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#ffd43b;
+  border:2px solid #12161d;margin-top:-5px;box-shadow:0 0 6px #ffd43b88;
+}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:#3a4a5e}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border:2px solid #12161d;border-radius:50%;background:#ffd43b}
+.marks{position:relative;height:14px;margin:-2px 0 0}
+.marks i{position:absolute;top:0;width:2px;height:8px;background:#4b5b70;border-radius:1px}
+.marks i.r{background:#ffd43b;height:11px}
+.marks i.t{background:#5fa8d3;height:9px}
+.marks i.cur{background:#fff;height:13px;width:3px}
+.legend{font-size:11px;color:var(--fg3);display:flex;gap:14px;flex-wrap:wrap;margin-top:2px}
+.err{padding:20px;color:#ff9d9d;font-size:13px;line-height:1.8}
+.err code{background:#2a1a1e;padding:2px 6px;border-radius:4px;color:#ffd08a}
+body.drag::after{
+  content:"松开以载入回放文件";position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:#0a0e14cc;color:#ffd43b;font-size:22px;font-weight:700;z-index:99;
+  border:3px dashed #ffd43b;
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">奥奇传说 · 对战回放查看器 <small>拖动进度条 = 逐检查点回溯</small></div>
+  <div class="meta" id="meta"></div>
+  <div class="spacer"></div>
+  <button id="btnLayout" title="切换站位布局：纵向（左右分栏）／横向（双方并排、战报在下）">布局：纵向</button>
+  <button id="btnDetach" title="把文字战报拖出为浮动窗，可拖动位置（快捷键 L）">拖出战报</button>
+  <button id="btnLoad">载入其他回放…</button>
+  <button id="btnReset">重置分栏</button>
+  <button id="btnPre">显示战前被动</button>
+  <button id="btnPlay">▶ 自动播放</button>
+  <input type="file" id="file" accept=".json,application/json">
+</header>
+
+<main id="app">
+  <section class="col-left" id="colLeft">
+    <div class="panel-h">
+      <b>站位</b>
+      <span>九宫格（按列编号）：</span>
+      <span class="gridcap" style="margin:0">7&nbsp;4&nbsp;1&nbsp;/&nbsp;8&nbsp;5&nbsp;2&nbsp;/&nbsp;9&nbsp;6&nbsp;3</span>
+      <span id="boardHint">· 黄框＝出手 · 红框＝受伤</span>
+    </div>
+    <div class="gauges" id="gauges"></div>
+    <div class="board" id="board"></div>
+  </section>
+  <div class="resizer" id="resizer" title="拖动以调节左右两栏宽度（双击重置）"></div>
+  <div class="resizer-h" id="resizerH" title="拖动以调节「站位」与「文字战报」的上下高度（双击重置）"></div>
+  <section class="col-right" id="colRight">
+    <div class="panel-h" id="logHead">
+      <b>文字战报</b>
+      <span id="logHint"></span>
+      <span class="spacer"></span>
+      <span id="evCount" class="meta"></span>
+      <span class="tool" id="winTools" title="拖出为浮动窗">⧉ 拖出</span>
+    </div>
+    <div class="log" id="log"></div>
+    <i class="rz e" data-rz="e" title="拖动改变宽度"></i>
+    <i class="rz s" data-rz="s" title="拖动改变高度"></i>
+    <i class="rz se" data-rz="se" title="拖动改变大小"></i>
+  </section>
+</main>
+
+<footer>
+  <div class="tl-top">
+    <span class="ck" id="ckLabel">检查点 —</span>
+    <span class="spacer"></span>
+    <span class="meta" id="tlHint">← → 单步　Shift+← → 跳轮次　Ctrl+← → 跳回合　B 换布局　L 拖出战报　Home/End 首尾</span>
+  </div>
+  <input type="range" id="range" min="0" max="0" value="0" step="1">
+  <div class="marks" id="marks"></div>
+  <div class="legend">
+    <span>■ 黄线＝回合起点</span>
+    <span>■ 灰线＝单次技能</span>
+    <span>数字格式：血 -1234 / 盾 -5678</span>
+  </div>
+</footer>
+
+<script id="embedReplay" type="application/json"></script>
+<script>
+"use strict";
+/* 全局错误兜底：任何脚本异常都显示在页面上，避免“静默失败” */
+window.__errs = [];
+function __showErr(msg){
+  window.__errs.push(msg);
+  var el = document.getElementById('meta');
+  if (el) el.innerHTML = '<span style="color:#ff9d9d">脚本错误：' + msg + '</span>';
+  var bd = document.getElementById('board');
+  if (bd && !window.__tlLoaded) bd.innerHTML = '<div class="err">运行出错：' + msg + '</div>';
+}
+window.addEventListener('error', function(ev){
+  __showErr((ev.message||'?') + ' @line ' + (ev.lineno||'?'));
+});
+window.addEventListener('unhandledrejection', function(ev){ __showErr('Promise: ' + ev.reason); });
+
+/* =========================================================================
+   解析层：从原始回放 JSON 构建统一时间轴（与 aoqi_parser.py 逻辑一致）
+   ========================================================================= */
+const $ = s => document.querySelector(s);
+
+function csv(s){ return (s===undefined||s===null||s==='') ? [] : String(s).split(',').filter(Boolean); }
+function triples(s){
+  const out=[];
+  csv(s).forEach(p=>{ const f=p.split('_');
+    if(f.length===3){ const a=+f[0],b=+f[1],c=+f[2];
+      if(!isNaN(b)) out.push([a,b,c]); } });
+  return out;
+}
+function sumDeltas(t){ return t.reduce((a,x)=>a+x[1],0); }
+function skillKind(sid){
+  if(sid===null||sid===undefined) return 'other';
+  const s=+sid;
+  if(s>=100000 && s<200000) return 'normal';
+  if(s>=200000 && s<300000) return 'ult';
+  return 'other';
+}
+/* 转数字。注意：部分标量字段可能是逗号分隔的**多值**形式
+   （实测 att_hps='0,0'、'-11908352,-11324152'，att_shps 同理，
+    出现在 回放3 / 回放4），此时返回各段之和；解析不出数字则返回 null。 */
+function num(v){
+  if (typeof v === 'number') return v;
+  if (v === undefined || v === null || v === '') return null;
+  const s = String(v);
+  if (s.indexOf(',') < 0) { const n = +s; return isNaN(n) ? null : n; }
+  let total = 0, ok = false;
+  s.split(',').forEach(x=>{
+    if (!x) return;
+    const n = +x;
+    if (!isNaN(n)){ total += n; ok = true; }
+  });
+  return ok ? total : null;
+}
+
+/* 模块级单位查名：渲染层与 buildTimeline 都要用（不能定义在 buildTimeline 内部，
+   也不能只依赖 S.tl —— label 是在 S.tl 赋值之前生成的） */
+const NAMES = {};                 // uid -> name，由 buildTimeline 填充
+function uName(u){
+  if (NAMES[u] !== undefined) return NAMES[u];
+  const t = (typeof S !== 'undefined' && S && S.tl) ? S.tl.units : null;
+  if (t && t[u]) return t[u].name;
+  return '#' + u;
+}
+
+/* ============================================================
+   九宫格站位
+   ------------------------------------------------------------
+   屏幕布局（行1..行3 自上而下，列1..列3 自左而右）：
+
+       第1列    第2列     第3列
+        7        4        1        ← 行1
+        8        5        2        ← 行2
+        9        6        3        ← 行3
+
+   回放里每个单位带 (x,y) 坐标，与格子编号的关系：
+       编号 = x + 1 + 3y
+
+   但注意：回放的 x / y 与屏幕的 行 / 列 是「交叉」的 ——
+       x 决定屏幕的【行】           （x=0→行1，x=2→行3）
+       y 决定屏幕的【列】（反向）   （y=2→列1，y=0→列3）
+   所以屏幕映射为：
+       行 row = x + 1
+       列 col = 3 - y
+
+   该公式已用 回放1.json 的 9 个格位与真实对局布局逐一验证（9/9 命中）。
+   ============================================================ */
+
+/* 由 (x,y) 坐标求屏幕行列（1-based） */
+/* 编号 (x,y) → 屏幕 (行, 列)。
+   正常：屏幕列 = 3 - y（编号 1 在右上角，即「从右上角开始往下读 1 2 3」）。
+   镜像（mirror=true）：屏幕列 = y + 1（编号 1 落到左上角），行不变。 */
+function xyToScreen(x, y, mirror){
+  return { row: x + 1, col: mirror ? (y + 1) : (3 - y) };
+}
+
+/* 重名单位（复制体/召唤体）在战报里加格子号区分：以撒(4号) / 以撒(1号) */
+const DUP = {};
+function nameLabel(uid){
+  const nm = uName(uid);
+  return DUP[uid] ? (nm + '(' + DUP[uid] + '号)') : nm;
+}
+
+/* 校验：这是不是一个奥奇传说回放文件 */
+function looksLikeReplay(d){
+  return d && typeof d==='object' && d.br && typeof d.br==='object' &&
+         Array.isArray(d.br.fr) && d.br.or && Array.isArray(d.br.or.team);
+}
+
+function buildTimeline(data){
+  const br = data.br, fr = br.fr;
+  // 取第一个含记录的帧
+  let fi = fr.findIndex(f => Array.isArray(f.rl) && f.rl.length);
+  if (fi < 0) fi = 0;
+  const frame = fr[fi];
+
+  /* ---------- 玩家 / 单位字典 ---------- */
+  const players = {}, units = {};
+  // 同一位置上可能叠着多个单位（复制体落在同一格），按格收集
+  const slotMap = {};        // 'team|gridNo' -> [uid,...]
+  br.or.team.forEach(team=>{
+    const tid = team.id;
+    (team.players||[]).forEach(pl=>{
+      const pf = pl.ppbf||{};
+      // pbid = 通灵师卡牌 ID；阈值优先取 mp（实测 12/14），缺失时退回 cp
+      const thr = (typeof pf.mp === 'number' && pf.mp > 0) ? pf.mp
+                : ((typeof pf.cp === 'number' && pf.cp > 0) ? pf.cp : null);
+      players[pl.id] = {uid:pl.id, name:pl.name, team:tid, power:pl.fp,
+                        hs:pl.hs, sp:pl.sp,
+                        beast: pf.pbid,
+                        maxGauge: thr};
+      (pl.cts||[]).forEach(c=>{
+        const gz = c.x + 1 + 3 * c.y;
+        units[c.id] = {
+          uid:c.id, name:c.name, team:tid, ownerUid:pl.id, ownerName:pl.name,
+          x:c.x, y:c.y, gz:gz, lvl:c.lvl, hp0:c.hp, maxHp0:c.maxHp, shp0:c.shp||0,
+          avg0:c.vigour, attr:c.attr, nskill:c.nskill, uskills:c.uskills,
+          dup:false, slotIdx:0
+        };
+        NAMES[c.id] = c.name;      // 立刻登记，供本函数内生成 label 使用
+        const k = tid + '|' + gz;
+        (slotMap[k] = slotMap[k] || []).push(c.id);
+      });
+    });
+  });
+  // 标记重名单位（同名 ≥2 个），并区分「本体 / 复制体 / 附属体」
+  const nameCount = {};
+  Object.values(units).forEach(u=>{ nameCount[u.name] = (nameCount[u.name]||0) + 1; });
+  Object.keys(slotMap).forEach(k=>{
+    const list = slotMap[k];
+    list.forEach((uid, i)=>{
+      const u = units[uid];
+      u.slotIdx = i;
+      if (nameCount[u.name] > 1){
+        u.dup = true;
+        DUP[uid] = u.gz;
+      }
+    });
+  });
+  // 同名的多个单位里，气势为 0 的那个是「附属体」（无独立能量条；实测其作为目标时血量恒为 0，
+  // 且不出现在出手序 seqa 中）。
+  // 其余同组单位：由玩家直接上阵的那个位置（实际是坐标最小的那个，即战斗日志里最早出现的位置）
+  // 视为「本体」，另一个标为「复制体」。
+  // 注意「复制体」不同于「附属体」：复制体有独立血池与气势，是真正的第二个单位。
+  Object.keys(nameCount).forEach(nm=>{
+    if (nameCount[nm] < 2) return;
+    const grp = Object.values(units).filter(u=>u.name===nm);
+    const body = grp.find(u=>u.avg0);            // 有气势的才有独立能量条
+    const attach = grp.filter(u=>!u.avg0);
+    if (attach.length === 1 && body){
+      attach[0].role = 'attach';
+      body.role = 'body';
+      // 同组若还有第三个（如双复制体），按坐标顺序把最早的那个当本体，其余为复制体
+      grp.filter(u=>u.role===undefined).forEach(u=>{ u.role = 'copy'; });
+      return;
+    }
+    // 无附属体（例如「以撒」的复制体）：同组里 id 最小的那个视为玩家原本上阵的本体，
+    // 其余标为复制体。依据：本体先于复制体生成，其 id 更小
+    //（本局 4 号位 id=299 是本体，1 号位 id=868 是复制体）。
+    grp.sort((a,b)=> a.uid - b.uid);
+    grp.forEach((u,i)=>{ u.role = i===0 ? 'body' : 'copy'; });
+  });
+  const uOf = u => units[u] || null;
+
+  /* ---------- 事件流 ---------- */
+  const events = [];
+  frame.rl.forEach((r, idx)=>{
+    const isAct = Object.prototype.hasOwnProperty.call(r,'seqa');
+    const caster = (r.cci!==undefined) ? r.cci : r.cpi;
+    const ev = {
+      i: idx, kind: isAct?'act':'pre',
+      // csn 是真正的回合号（实测：闪避对照=1、比对1=2、回放1=3、回放3=4）
+      round: r.csn, team: r.cti,
+      turnG: null, teamSeq: 0,
+      casterUid: caster, ownerName: r.cpn,
+      epbi: r.epbi,
+      skillId: null, skillKind: null, skillName: null,
+      pr: r.pr,
+      seqa: r.seqa||null,
+      casterState:null, prl:[], resource:[], targets:[]
+    };
+    if (isAct){
+      const sid = num(r.si);
+      ev.skillId = sid;
+      ev.skillKind = skillKind(sid);
+      const u = uOf(caster);
+      if (u && sid === u.nskill)      ev.skillName = '普攻';
+      else if (u && sid === u.uskills) ev.skillName = '超杀';
+      else ev.skillName = ({normal:'普攻',ult:'超杀'})[ev.skillKind] || '技能';
+      if (u && sid !== u.nskill && sid !== u.uskills) ev.skillMismatch = true;
+    }
+    // 施法者状态
+    if (r.cn){
+      const cn = r.cn;
+      ev.casterState = {
+        hp:num(cn.ahp), shp:num(cn.ashp), avg:num(cn.avg),
+        att_vgs:num(cn.att_vgs),
+        ab_vgs:triples(cn.ab_vgs), bb_vgs:triples(cn.bb_vgs),
+        ab_hps:triples(cn.ab_hps), ab_shps:triples(cn.ab_shps),
+        ad_bfs:csv(cn.ad_bfs), bd_bfs:csv(cn.bd_bfs), rl:cn.rl||[]
+      };
+    }
+    // 通灵条变更（t==4）可能出现在 cn / prl / trl 三种节点里，统一收集
+    (function collectGauge(){
+      const push = (tn, ownerUid)=>{
+        (tn.rl||[]).forEach(ch=>{
+          if (ch.t!==4) return;
+          ev.resource.push({
+            ownerUid:num(ownerUid), pbid:ch.pbid, mp:num(ch.mp),
+            proa:num(ch.proa), prob:num(ch.prob), vc:num(ch.vc),
+            // 触发标记：通灵效果真正执行的那一条记录是 (isse=true, o=1)，
+            // 其余条子是 (isse=false, o=2)。实测该标记与
+            // 「epbi == 通灵师 pbid 的 PRE 事件」完全等同（15/15）。
+            isFire: !!ch.isse && ch.o === 1
+          });
+        });
+      };
+      if (r.cn) push(r.cn, r.cpi);
+      (r.prl||[]).forEach(p=> push(p.tn||{}, p.tpi));
+      (r.trl||[]).forEach(t=> push(t.tn||{}, t.tpi));
+    })();
+    // prl：施法前状态
+    (r.prl||[]).forEach(p=>{
+      const tn = p.tn||{};
+      ev.prl.push({
+        uid:num(p.tpi), hp:num(tn.ahp), shp:num(tn.ashp), rl:tn.rl||[]
+      });
+    });
+    // trl
+    (r.trl||[]).forEach(t=>{
+      const tn = t.tn||{};
+      const abh = triples(tn.ab_hps), bbh = triples(tn.bb_hps);
+      const abv = triples(tn.ab_vgs), bbv = triples(tn.bb_vgs);
+      const dmgHp = num(tn.att_hps), dmgShp = num(tn.att_shps);
+      const inner = sumDeltas(abh) + sumDeltas(bbh);
+      ev.targets.push({
+        uid:num(t.tci), hp:num(tn.ahp), shp:num(tn.ashp), avg:num(tn.avg),
+        hit:!!t.ishit, eff:!!t.isse, block:!!t.isbl, crit:!!t.iscr,
+        immune:!!t.isIm,
+        // 闪避：技能确实作用于该目标(isse=true)但没命中(ishit=false)。
+        // 实测此组合下不会有任何伤害字段、isbl/iscr/isIm/issb 全为 false，
+        // 与「格挡/免疫」（均为 isse=true + ishit=true）可清楚区分。
+        dodged: !!t.isse && !t.ishit,
+        dmgHp:dmgHp, dmgShp:dmgShp,
+        innerHp:inner,
+        deltaVgs: abv.concat(bbv).map(x=>x[1]),
+        ad_bfs:csv(tn.ad_bfs), bd_bfs:csv(tn.bd_bfs), rl:tn.rl||[]
+      });
+    });
+    events.push(ev);
+  });
+
+  /* ---------- 轮次切分（供战报分组与时间轴刻度用） ----------
+     术语（已按用户实测修正）：
+       csn  = 真正的「回合」号（见上面 ev.round）
+       pr   = 该队在本回合内的第几次出手
+       「轮次」= 双方各完成一次出手（一个完整来回）；
+                一个回合里通常包含多个轮次。
+     切分规则：出手方 cti 再次轮到第一支出手的队伍即为新轮次边界；
+              回合号变化时也必须断开。
+     产出：每个 ACT 事件打上 turnG（轮次号，从 1 起）与 teamSeq（该队在本轮次的第几次出手）；
+          PRE 事件没有轮次归属，turnG 保持 null。 */
+  const acts = events.filter(e=>e.kind==='act');
+  let cur = [], seenOther = false, curRound = null, turnCount = 0;
+  const flushTurn = ()=>{
+    if (!cur.length) return;
+    turnCount++;
+    cur.forEach(e=>{ e.turnG = turnCount; });
+    cur = [];
+    seenOther = false;
+  };
+  acts.forEach(e=>{
+    if (curRound === null) curRound = e.round;
+    if (e.round !== curRound){ flushTurn(); curRound = e.round; }
+    if (e.team === acts[0].team){ if (seenOther) flushTurn(); }
+    else seenOther = true;
+    cur.push(e);
+  });
+  flushTurn();
+  // 该队在本轮次内的第几次出手
+  const teamSeq = {};
+  acts.forEach(e=>{
+    const k = e.turnG + '|' + e.team;
+    teamSeq[k] = (teamSeq[k]||0) + 1;
+    e.teamSeq = teamSeq[k];
+  });
+
+  /* ---------- 回合列表（供面板统计与断言用） ---------- */
+  const roundNums = [...new Set(acts.map(e=>e.round))].sort((a,b)=>a-b);
+
+  /* ---------- 通灵条：预先把每个事件的最终值算好 ----------
+     实测机制（依据五份样本核对）：
+       - 条子数值 = 记录里的 prob（普通记录 isse=false, o=2）
+       - 真正「触发通灵效果」的那条记录是 (isse=true, o=1)，
+         其 prob 记的是【消耗量】而不是当场数值，所以取值时要跳过它，
+         同时把该事件标记为 fired。
+       - 触发不由「条子是否达到 mp」决定：mp(12/14) 并不总是触发阈值，
+         实测消耗量有 12~21 多种，条子值也可能在 13/14 时就触发。
+         因此只有「存在触发记录」才算触发。
+     同一事件可能有多条记录（cn / prl / trl 各一份），按出现顺序取最后一条。 */
+  const gaugeFinal = {};      // eventIndex -> {ownerUid: 值}
+  const gaugeFire  = {};      // eventIndex -> {ownerUid: 消耗量}
+  events.forEach((e,ei)=>{
+    const vals = {}, fires = {};
+    (e.resource || []).forEach(r=>{
+      if (r.isFire){
+        if (!fires[r.ownerUid]) fires[r.ownerUid] = r.prob;
+        return;                                  // 触发记录不更新条子当前值
+      }
+      if (r.prob === null || r.prob === undefined) return;
+      vals[r.ownerUid] = r.prob;
+    });
+    gaugeFinal[ei] = vals;
+    if (Object.keys(fires).length) gaugeFire[ei] = fires;
+  });
+
+  /* ---------- 检查点标签 ----------
+     每个事件就是一个检查点，所以事件下标 e.i 直接用作检查点序号（e.ci）。
+     PRE 事件属于其所在回合的「战前」。 */
+  events.forEach((e,ci)=>{
+    e.ci = ci;
+    e.label = e.kind==='pre'
+      ? ('回合'+e.round+' 战前被动 · 技能'+e.epbi)
+      : ('回合'+e.round+' · '+nameLabel(e.casterUid)+' '+e.skillName);
+  });
+
+  const meta = {
+    cmd:data._cmd, ai:data.ai, r:data.r, ver:br.ver, pve:!!br.pve, win:br.win,
+    bi:br.bi, scene:(br.or||{}).sn, frameIndex:fi, frames:fr.length,
+    events:events.length, acts:acts.length, pres:events.length-acts.length,
+    rounds:roundNums.length, turns:turnCount, roundNums:roundNums,
+    absCount:csv(br.abs).length, ir:br.ir||null,
+    winTeam: br.win===0 ? 0 : 1
+  };
+  return {meta, players, units, events, gaugeFinal, gaugeFire};
+}
+
+/* =========================================================================
+   状态层：重放 / 快照
+   ========================================================================= */
+const S = {
+  tl:null, ci:0, showPre:true, playing:false, timer:null, fileName:'', split:520,
+  layout:'v',      // 'v' = 纵向（站位左 / 战报右）；'h' = 横向（双方站位并排 / 战报在下）
+  detached:false   // 文字战报是否「拖出」为浮动窗（默认否）
+};
+
+/* =========================================================================
+   状态层：重放到第 ci 个检查点，得到每个单位的快照 + 本次变化标记
+   ========================================================================= */
+function replayTo(tl, ci){
+  const st = {};
+  Object.values(tl.units).forEach(u=>{
+    st[u.uid] = {
+      uid:u.uid, hp:u.hp0, maxHp:u.maxHp0, shp:u.shp0, avg:u.avg0,
+      dead:false, dHp:0, dShp:0, dAvg:0, flags:[],
+      atk:false, vic:false, heal:false
+    };
+  });
+  // 通灵条状态：每个玩家一条（通灵师 + 条子当前值/上限）。
+  // 依据：tn.rl 里 t==4 的变更为 {pbid, mp, proa, prob, vc}，
+  //       mp 是上限（实测 12 或 14），proa/prob 才是条子数值。
+  const gauge = {};
+  Object.values(tl.players).forEach(p=>{
+    if (!p.beast || p.maxGauge === null) return;
+    gauge[p.uid] = {uid:p.uid, name:p.name, team:p.team, pbid:p.beast,
+                    max:p.maxGauge, val:0, base:0, d:0, fired:false, cost:null, pending:false};
+  });
+  for (let k=0;k<=ci && k<tl.events.length;k++){
+    const e = tl.events[k];
+    const fresh = (k===ci);
+    if (fresh){
+      // 清空本次变化
+      Object.values(st).forEach(s=>{
+        s.dHp=0; s.dShp=0; s.dAvg=0; s.flags=[];
+        s.atk=false; s.vic=false; s.heal=false;
+      });
+      Object.values(gauge).forEach(g=>{ g.d=0; g.fired=false; });
+      if (e.casterUid!=null && st[e.casterUid]) st[e.casterUid].atk = true;
+    }
+    // 通灵条状态机（每个事件推进一次）：
+    //   1) 本事件有触发记录 → 条子到达阈值后随即被清空：显示钳到阈值、内部记 0，pending=true
+    //   2) 本事件有普通记录 → 用该值，pending 清掉
+    //   3) 两者都没有但 pending → 保持 0（触发后隔着几个空帧也不会涨回旧值）
+    //   4) 其余 → 沿用上一次的值
+    Object.keys(gauge).forEach(uid=>{
+      const g = gauge[uid];
+      const r = gaugeValueAt(tl, k, uid, g.val);
+      if (r.fire !== null && r.fire !== undefined){
+        g.fired = true; g.cost = r.fire;
+        g.val = g.max;                 // 触发瞬间条子在阈值位置
+        g.pending = true;
+      } else if (r.val !== null && r.val !== undefined){
+        g.val = g.pending ? 0 : r.val;
+        g.pending = false;
+      } else if (g.pending){
+        g.val = 0;
+      }
+    });
+    if (fresh){
+      Object.values(gauge).forEach(g=>{ g.d = g.val - g.base; });
+    } else {
+      // 遍历中间：推进基准，使 fresh 时的 base 恰好是「上一检查点的值」
+      Object.values(gauge).forEach(g=>{ g.base = g.val; });
+    }
+    // 施法者自身状态（cn / prl）
+    const selfNodes = [];
+    if (e.casterState) selfNodes.push({uid:e.casterUid, hp:e.casterState.hp,
+                                       shp:e.casterState.shp, avg:e.casterState.avg});
+    e.prl.forEach(p=>selfNodes.push({uid:p.uid, hp:p.hp, shp:p.shp, avg:null}));
+    selfNodes.forEach(n=>{
+      const s = st[n.uid]; if(!s) return;
+      if (n.hp!==null && n.hp!==undefined){
+        if (fresh){ const d = n.hp - s.hp; if (d) s.dHp += d; }
+        s.hp = n.hp;
+      }
+      if (n.shp!==null && n.shp!==undefined){
+        if (fresh){ const d = n.shp - s.shp; if (d) s.dShp += d; }
+        s.shp = n.shp;
+      }
+      if (n.avg!==null && n.avg!==undefined){
+        if (fresh){ const d = n.avg - s.avg; if (d) s.dAvg += d; }
+        s.avg = n.avg;
+      }
+      s.dead = s.hp<=0;
+    });
+    // 目标
+    e.targets.forEach(t=>{
+      const s = st[t.uid]; if(!s) return;
+      const before = s.hp, beforeShp = s.shp, beforeAvg = s.avg;
+      // 用「记录值」直接覆盖为权威
+      if (t.hp!==null && t.hp!==undefined) s.hp = t.hp;
+      if (t.shp!==null && t.shp!==undefined) s.shp = t.shp;
+      if (t.avg!==null && t.avg!==undefined) s.avg = t.avg;
+      if (s.hp > s.maxHp) s.maxHp = s.hp;
+      const dHp = s.hp - before, dShp = s.shp - beforeShp, dAvg = s.avg - beforeAvg;
+      if (fresh){
+        s.dHp += dHp; s.dShp += dShp; s.dAvg += dAvg;
+        // 受害/治疗高亮：本次结算里血量或盾减少 → 受伤；增加 → 治疗
+        const took = (dHp < 0 || dShp < 0 || (t.dmgHp||0) < 0 || (t.dmgShp||0) < 0);
+        const got  = (dHp > 0 || dShp > 0);
+        if (took && t.uid !== e.casterUid) s.vic = true;
+        if (got) s.heal = true;
+        if (t.crit) s.flags.push('crit');
+        if (t.block) s.flags.push('block');
+        if (t.immune) s.flags.push('immune');
+        if (t.dodged) s.flags.push('dodge');
+        if (before>0 && s.hp>before && t.dmgHp && t.dmgHp<0) s.flags.push('revive');
+      }
+      if (before>0 && s.hp<=0) s.dead = true;
+      if (s.hp>0) s.dead = false;
+    });
+    // 上限变更 t=2
+    e.targets.forEach(t=>{
+      (t.rl||[]).forEach(ch=>{
+        if (ch.t===2 && ch.new_maxv){ const s=st[t.uid]; if(s){ s.maxHp = ch.new_maxv;
+          if (fresh) s.flags.push('maxup'); } }
+      });
+    });
+    if (e.casterState) (e.casterState.rl||[]).forEach(ch=>{
+      if (ch.t===2 && ch.new_maxv){ const s=st[e.casterUid]; if(s){ s.maxHp=ch.new_maxv;
+        if(fresh) s.flags.push('maxup'); } }
+    });
+  }
+  return {st, gauge};
+}
+/* =========================================================================
+   渲染层
+   ========================================================================= */
+let SNAP = null;
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fnum(v){ return v>0 ? ('+'+v.toLocaleString()) : v.toLocaleString(); }
+
+function renderMeta(){
+  const m = S.tl.meta;
+  const win = m.win===0;
+  $('#meta').innerHTML =
+    `<b>${esc(m.scene||'?')}</b> · 协议 <span class="num">${esc(m.cmd||'?')}</span> · ` +
+    `${m.pve?'PVE':'PVP'} · 第${m.frameIndex+1}/${m.frames}帧 · ` +
+    `事件 <b>${m.events}</b>(动作${m.acts}/被动${m.pres}) · 回合 <b>${m.rounds}</b> · 轮次 ${m.turns} · ` +
+    `<span class="tag ${win?'win':'lose'}">${win?'我方胜':'我方负'}</span>`;
+}
+
+function teamInfo(team){
+  const us = Object.values(S.tl.units).filter(u=>u.team===team);
+  return {name: us.length?us[0].ownerName:('阵营'+team), count:us.length, units:us};
+}
+
+/* 读取预计算结果，判断「某事件对某玩家的通灵条」是触发还是普通取值：
+     - 有触发记录 → { fire: 消耗量 }（该记录的 prob 是消耗量，不是条子值）
+     - 有普通记录 → { val: 条子值 }
+     - 都没有     → { val: 上一次的值 }（原样返回 prev）
+   不依赖任何持久标志，避免「触发后隔着几个无记录的帧又涨回旧值」。 */
+function gaugeValueAt(tl, k, uid, prev){
+  const f = tl.gaugeFire && tl.gaugeFire[k] ? tl.gaugeFire[k][uid] : undefined;
+  if (f !== undefined) return { fire: f, val: null };
+  const g = tl.gaugeFinal && tl.gaugeFinal[k] ? tl.gaugeFinal[k][uid] : undefined;
+  if (g !== undefined) return { fire: null, val: g };
+  return { fire: null, val: prev };
+}
+
+/* 通灵条 HTML。team===null 表示两条都出；否则只出该阵营那条。
+   横向布局下每个阵营的条子放进各自的棋盘卡片里。 */
+function gaugeHTML(team){
+  const gs = SNAP.gauge || {};
+  let list = Object.values(gs).sort((a,b)=> a.team - b.team);
+  if (team !== null && team !== undefined) list = list.filter(g=>g.team === team);
+  if (!list.length) return (team === null || team === undefined)
+    ? '<div class="ghint">本回放没有通灵条数据（玩家 ppbf 缺少 pbid/mp）</div>' : '';
+  let html = '';
+  list.forEach(g=>{
+    // 条子可能溢出阈值（实测可达 22），但进度条不撑爆：满格封顶
+    const over = g.val > g.max;
+    const pct = Math.max(0, Math.min(100, g.val / Math.max(1,g.max) * 100));
+    const dTxt = g.d ? `<span class="tagd ${g.d>0?'pos':'neg'}">${g.d>0?'+':''}${g.d}</span>` : '';
+    const fire = g.fired
+      ? `<span class="tagf">通灵触发</span><span class="pb">消耗 ${g.cost !== null && g.cost !== undefined ? g.cost : '?'}</span>`
+      : (over ? `<span class="tagf">已满 <span class="ov">+${g.val - g.max}</span></span>`
+              : (g.val >= g.max ? '<span class="tagf">已满</span>' : ''));
+    html += `<div class="gauge t${g.team}${g.fired?' fired':(g.val>=g.max?' full':'')}">`
+          + `<span class="who t${g.team}">${esc(g.name)}</span>`
+          + `<span class="track"><i class="fill" style="width:${pct}%"></i></span>`
+          + `<span class="num">${g.val} / ${g.max}</span>`
+          + fire + dTxt
+          + `</div>`;
+  });
+  return html;
+}
+
+function renderGauges(){
+  $('#gauges').innerHTML = gaugeHTML(null);
+}
+
+/* 渲染一个格位。gz 为格子编号(1..9)，由该编号反推坐标，再用 CSS Grid 显式定位，
+   保证屏幕上「7 4 1 / 8 5 2 / 9 6 3」的布局与编号严格一致。
+   mirror=true 时该阵营的九宫格左右镜像（编号 1 落在左上角），
+   横向布局下双方面对面，一侧镜像更接近游戏内的视觉对峙感。 */
+function renderSlot(team, gz, ulist, st, mirror){
+  const y = Math.floor((gz - 1) / 3), x = (gz - 1) % 3;   // 编号 → 坐标
+  const pos = xyToScreen(x, y, mirror);
+  const at = `style="grid-row:${pos.row};grid-column:${pos.col}"`;
+  if (!ulist.length){
+    return `<div class="cell empty" ${at}><span class="gzempty">${gz}</span><span>空位</span></div>`;
+  }
+  const multi = ulist.length > 1;
+  let inner = '';
+  ulist.forEach((u, idx)=>{
+    const s = st[u.uid];
+    const pct = Math.max(0, Math.min(100, s.hp/Math.max(1,s.maxHp)*100));
+    const cls = pct>60?'':(pct>25?'warn':'crit');
+    const shpPct = s.shp>0 ? Math.min(100, s.shp/Math.max(1,s.maxHp)*100) : 0;
+    const badges = [];
+    if (s.dead) badges.push('<span class="badge d">阵亡</span>');
+    if (s.flags.includes('revive')) badges.push('<span class="badge h">复活</span>');
+    if (s.flags.includes('maxup')) badges.push('<span class="badge h">上限↑</span>');
+    if (u.role === 'attach') badges.push('<span class="badge a">附属体</span>');
+    else if (u.role === 'body') badges.push('<span class="badge">本体</span>');
+    else if (u.role === 'copy') badges.push('<span class="badge">复制体</span>');
+    if (multi) badges.push(`<span class="badge">格内 ${idx+1}/${ulist.length}</span>`);
+    if (s.flags.includes('crit')) badges.push('<span class="badge d">暴击</span>');
+    if (s.flags.includes('block')) badges.push('<span class="badge k">格挡</span>');
+    if (s.flags.includes('immune')) badges.push('<span class="badge s">免疫</span>');
+    if (s.flags.includes('dodge')) badges.push('<span class="badge s">闪避</span>');
+
+    const cellCls = [
+      'u',
+      s.dead ? 'dead' : '',
+      s.atk ? 'atk' : '',
+      s.vic ? 'vic' : '',
+      (!s.atk && !s.vic && s.heal) ? 'healed' : '',
+      s.flags.length ? 'flash' : ''
+    ].filter(Boolean).join(' ');
+
+    const dHp = s.dHp ? `<span class="d ${s.dHp<0?'neg':'pos'}">${fnum(s.dHp)}</span>` : '';
+    const dShp = s.dShp ? `<span class="d ${s.dShp<0?'neg':'pos'}">${fnum(s.dShp)}</span>` : '';
+    const dAvg = s.dAvg ? `<span class="d ${s.dAvg<0?'neg':'pos'}">${fnum(s.dAvg)}</span>` : '';
+
+    inner += `<div class="${cellCls}">
+      <div class="row1">
+        ${idx===0 ? `<span class="gz">${gz}</span>` : '<span class="gz" style="opacity:.55">叠</span>'}
+        <span class="nm">${esc(u.name)}</span>
+        <span class="lvl">Lv${u.lvl}</span>
+      </div>
+      <div class="bar"><i class="${cls}" style="width:${pct}%"></i></div>
+      ${s.shp>0?`<div class="bar shp"><i style="width:${shpPct}%"></i></div>`:''}
+      <div class="stats">
+        <div class="st vg"><span class="k">气势</span><span class="v">${s.avg.toLocaleString()}</span>${dAvg}</div>
+        <div class="st hp"><span class="k">血量</span><span class="v">${s.hp.toLocaleString()} / ${s.maxHp.toLocaleString()}</span>${dHp}</div>
+        <div class="st shp"><span class="k">护盾</span><span class="v">${s.shp.toLocaleString()}</span>${dShp}</div>
+        <div class="st coord"><span class="k"></span><span class="v">坐标 (${u.x},${u.y})</span></div>
+      </div>
+      ${badges.length?`<div class="badges">${badges.join('')}</div>`:''}
+    </div>`;
+  });
+  return `<div class="slot t${team}${multi?' multi':''}" ${at}>${inner}</div>`;
+}
+
+function renderBoard(){
+  const st = SNAP.st;
+  const cur = S.tl.events[S.ci];
+  renderGauges();
+  const horiz = S.layout === 'h';
+  const parts = [];
+  [0,1].forEach(team=>{
+    // 横向布局下双方并排对峙 → 阵营1 的九宫格镜像（编号1 在左上角）
+    const mirror = horiz && team === 1;
+    const ti = teamInfo(team);
+    const alive = ti.units.filter(u=>!st[u.uid].dead).length;
+    const ph = cur ? cur.round : null;
+    const tn = cur ? cur.turnG : null;
+    let h = `<div class="team-h"><span class="dot" style="background:var(--t${team})"></span>`
+          + `<span class="nm">${esc(ti.name)}</span><span>阵营 ${team}</span>`
+          + (ph!=null?`<span>当前回合 ${ph}${tn!=null?` · 轮次 ${tn}`:''}</span>`:'')
+          + (mirror?'<span class="mir">镜像</span>':'')
+          + `<span class="rst">存活 ${alive}/${ti.count}</span></div>`;
+    // 列号条：说明每一屏幕列实际装的是哪几个编号。
+    // 正向（左上为7）依次是 第1列(7 8 9) / 第2列(4 5 6) / 第3列(1 2 3)；
+    // 镜像后左右翻转，因此屏幕从左到右变成 第3列 / 第2列 / 第1列。
+    h += `<div class="colhead">`
+       + (mirror
+          ? `<span>第3列<em>1 2 3</em></span><span>第2列<em>4 5 6</em></span><span>第1列<em>7 8 9</em></span>`
+          : `<span>第1列<em>7 8 9</em></span><span>第2列<em>4 5 6</em></span><span>第3列<em>1 2 3</em></span>`)
+       + `</div>`;
+    h += `<div class="grid${team===0?' gap':''}">`;
+    // 按格子编号 1..9 逐个渲染，位置由 xyToScreen() 由坐标推导
+    for (let gz=1; gz<=9; gz++){
+      const y = Math.floor((gz-1)/3), x = (gz-1)%3;
+      const ulist = ti.units.filter(u=>u.x===x && u.y===y)
+                            .sort((a,b)=>a.slotIdx-b.slotIdx);
+      h += renderSlot(team, gz, ulist, st, mirror);
+    }
+    h += `</div>`;
+    parts.push(horiz
+      ? `<div class="bwrap" data-team="${team}"><div class="gauges">${gaugeHTML(team)}</div>${h}</div>`
+      : (team===0 ? h + `<div class="seam">对阵双方分隔</div>` : h));
+  });
+  $('#board').innerHTML = parts.join('');
+  S.boardW = -1;          // 棋盘重绘后强制重新分配宽度
+  fitBoards();
+}
+
+/* 横向布局：把站位区可用宽度平分给两张棋盘卡片，并据此标记是否需要收字号。
+   用固定像素宽度（而不是 1fr）是为了让卡片宽度完全可控：
+   两张卡片 + 间距一定不超过容器宽度，绝不会把右侧棋盘挤出屏幕。 */
+function fitBoards(){
+  const board = $('#board');
+  if (!board || S.layout !== 'h') return;
+  const wraps = board.querySelectorAll('.bwrap');
+  if (wraps.length !== 2) return;
+  const avail = board.clientWidth - 14;              // 减去卡片间距
+  let w = Math.floor(avail / 2);
+  w = Math.min(w, 620);                              // 太宽反而不好看
+  if (w < 240) w = 240;                              // 再窄也没有可读性，交给横向滚动
+  // 宽度没变就不动 DOM：避免 ResizeObserver 被自己写入触发的反馈循环
+  if (S.boardW === w) return;
+  S.boardW = w;
+  wraps.forEach(el=>{
+    el.style.width = w + 'px';
+    el.dataset.narrow = (w < 430) ? '1' : '0';
+  });
+}
+
+/* 把一个目标分类为三档，用于文字战报：
+   damage —— 真正挨打/被影响（isse=true，或有血量、护盾、气势、状态的实质变化）
+   buff   —— 只被挂了增益/减益（isse=false，没有任何数值变化）
+   none   —— 只是"本次检查过的单位"，什么都没发生
+   回放的 trl 会把本次检查过的所有单位都列出来（一次普攻能列 9 个），
+   因此必须过滤，否则会把"点名但没生效"的条目当成伤害报出来
+   —— 这就是"只命中 2 人却显示打了一堆人"的原因。 */
+function targetClass(t){
+  if (t.dodged) return 'damage';                            // 闪避：打出去了但被闪掉，必须报出来
+  if (t.eff || t.dHp || t.dmgHp || t.dmgShp || t.innerHp ||
+      t.deltaVgs.length || (t.rl||[]).length) return 'damage';
+  if (t.ad_bfs.length || t.bd_bfs.length) return 'buff';
+  return 'none';
+}
+/* 兼容旧调用：是否值得显示 */
+/* 目标三档分类见 targetClass()：damage = 真正挨打（会写进战报）· buff = 仅挂增益 · none = 无变化 */
+
+function targetLine(t, ev){
+  const tn = nameLabel(t.uid);
+  const fl = [];
+  if (t.dodged) fl.push('<span class="fl dodge">闪避</span>');
+  if (t.block) fl.push('<span class="fl block">格挡</span>');
+  if (t.crit) fl.push('<span class="fl crit">暴击</span>');
+  if (t.immune) fl.push('<span class="fl immune">免疫</span>');
+  const parts = [];
+  if (t.dmgShp) parts.push(`<span class="shpd">盾 -${Math.abs(t.dmgShp).toLocaleString()}</span>`);
+  if (t.dHp) parts.push(`<span class="${t.dHp<0?'dmg':'heal'}">血 ${fnum(t.dHp)}</span>`);
+  if (t.isRevive) fl.push('<span class="fl rev">复活</span>');
+  const comp = [];
+  if (t.dmgHp && t.innerHp) comp.push(`直接${t.dmgHp.toLocaleString()} + 附加${fnum(t.innerHp)}`);
+  else if (!t.dmgHp && t.innerHp) comp.push(`附加${fnum(t.innerHp)}`);
+  else if (t.dmgHp && !t.dHp) comp.push(`直接${t.dmgHp.toLocaleString()}`);
+  if (t.deltaVgs.length) comp.push(`气势${t.deltaVgs.map(fnum).join('/')}`);
+  if (t.ad_bfs.length) comp.push(`+增益${t.ad_bfs.length}`);
+  if (t.bd_bfs.length) comp.push(`-增益${t.bd_bfs.length}`);
+  const rest = t.hp!==null&&t.hp!==undefined ? ` <span class="rest">余血 ${t.hp.toLocaleString()}${t.shp?` 盾${t.shp.toLocaleString()}`:''}</span>` : '';
+  return `<div class="tg">→ <span class="tn">${esc(tn)}</span> ${fl.join(' ')} ` +
+         `${parts.join(' ')} ${comp.length?`<span class="meta">(${comp.join('，')})</span>`:''}${rest}</div>`;
+}
+
+/* 预先算出每个目标「施法前后血量差」，用于文字战报 */
+function precomputeDeltas(){
+  const tmp = {};
+  Object.values(S.tl.units).forEach(u=>{ tmp[u.uid] = u.hp0; });
+  S.tl.events.forEach(e=>{
+    e.targets.forEach(t=>{
+      const before = tmp[t.uid];
+      t.prevHp = before;
+      if (t.hp!==null && t.hp!==undefined) tmp[t.uid] = t.hp;
+    });
+    // 施法者自身也可能变化
+    if (e.casterState && e.casterState.hp!==null && e.casterState.hp!==undefined)
+      tmp[e.casterUid] = e.casterState.hp;
+    e.prl.forEach(p=>{ if (p.hp!==null&&p.hp!==undefined&&p.uid!=null) tmp[p.uid]=p.hp; });
+  });
+  S.tl.events.forEach(e=>{
+    e.targets.forEach(t=>{
+      t.dHp = (t.hp!==null&&t.hp!==undefined) ? (t.hp - t.prevHp) : 0;
+      // 复活：记录的是致死伤害，但血量反而升到某个固定值
+      t.isRevive = !!(t.dHp>0 && t.dmgHp && t.dmgHp<0);
+    });
+  });
+}
+
+function renderLog(){
+  const cur = S.ci;
+  let html = '', lastRound = null;
+  // 预计算每回合的统计（轮次数 / 技能数 / 双方出手数），避免在循环里反复全表过滤
+  const roundStat = {};
+  S.tl.events.forEach(e=>{
+    if (e.kind !== 'act') return;
+    const s = roundStat[e.round] || (roundStat[e.round] = {n:0, t0:0, t1:0, turns:new Set()});
+    s.n++;
+    if (e.team === 0) s.t0++; else s.t1++;
+    s.turns.add(e.turnG);
+  });
+  S.tl.events.forEach((e,ci)=>{
+    if (e.kind==='pre' && !S.showPre) return;
+    // 回合（csn）变化时插一个回合标题
+    if (e.kind==='act' && e.round !== lastRound){
+      const s = roundStat[e.round];
+      html += `<div class="round-h" data-round="${e.round}">第 ${e.round} 回合`
+            + `<span class="cnt">共 ${s.turns.size} 个轮次 / ${s.n} 次技能（阵营0 出手 ${s.t0} / 阵营1 出手 ${s.t1}）</span></div>`;
+      lastRound = e.round;
+    }
+    const u = S.tl.units[e.casterUid] || {};
+    const who = u.name ? nameLabel(e.casterUid) : (e.ownerName || ('#'+e.casterUid));
+    const tm = (u.team!==undefined) ? u.team : e.team;
+    if (e.kind==='pre'){
+      // 战前被动同样只列真正生效的目标：优先 isse=true 的条目
+      let hits = e.targets.filter(t=>targetClass(t)==='damage');
+      if (!hits.length) hits = e.targets.filter(t=>targetClass(t)!=='none');
+      const tg = hits.length
+        ? hits.map(t=>esc(nameLabel(t.uid))).slice(0,6).join('、') + (hits.length>6?(' 等'+hits.length+'个目标'):'')
+        : '（未影响任何单位）';
+      html += `<div class="ev pre${ci===cur?' cur':''}" data-ci="${ci}">`
+        + `<div class="head"><span class="idx">#${ci}</span>`
+        + `<span class="who t${tm}">${esc(who)}</span>`
+        + `<span class="arrow">触发被动</span><span class="sk pre">技能 ${esc(e.epbi)}</span>`
+        + `<span class="meta">影响 ${hits.length} 个目标</span></div>`
+        + `<div class="extra">${tg}</div></div>`;
+    } else {
+    // 三档分类：真正挨打的 / 只被挂增益的 / 什么都没发生的
+    const hitList = [], buffList = [];
+    e.targets.forEach(t=>{
+      const k = targetClass(t);
+      if (k === 'damage') hitList.push(t);
+      else if (k === 'buff') buffList.push(t);
+    });
+    let tgs = '';
+    hitList.forEach(t=>{ tgs += targetLine(t, e); });
+    const res = e.resource.map(r=>`${nameLabel(r.ownerUid)}的兽 mp${r.mp!==null?`=${r.mp}`:''}${r.vc?` (${fnum(r.vc)})`:''}`).join('，');
+    // 只被挂增益的单位单独列出，措辞保持中立，不暗示"被打到"
+    let buffNote = '';
+    if (buffList.length){
+      const names = buffList.map(t=>esc(nameLabel(t.uid)));
+      const shown = names.slice(0,6).join('、') + (names.length>6?` 等 ${names.length} 个`:'');
+      buffNote = `<div class="extra">挂增益 ${buffList.length} 个：${shown}</div>`;
+    }
+    if (!hitList.length && !buffList.length){
+      buffNote = e.targets.length
+        ? `<div class="extra">本次未影响任何单位（检查了 ${e.targets.length} 个）</div>`
+        : '<div class="extra">（无目标）</div>';
+    }
+    html += `<div class="ev${ci===cur?' cur':''}" data-ci="${ci}">
+      <div class="head"><span class="idx">#${ci}</span>
+        <span class="who t${tm}">${esc(who)}</span>
+        <span class="arrow">→</span>
+        <span class="sk ${e.skillKind}">${esc(e.skillName)}</span>
+        <span class="meta">本队第 ${e.teamSeq} 次 · 技能${esc(e.skillId)}${hitList.length?` · 命中 ${hitList.length} 个`:''}</span></div>
+      ${tgs}${buffNote}
+      ${res?`<div class="extra">资源：${esc(res)}</div>`:''}
+    </div>`;
+    }
+  });
+  $('#log').innerHTML = html;
+  const el = $('#log .ev.cur');
+  if (el) el.scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+function renderTimeline(){
+  const n = S.tl.events.length;
+  const rg = $('#range');
+  rg.max = n-1; rg.value = S.ci;
+  // 刻度：回合起点用黄线（.r），轮次起点用浅蓝线（.t），其余为灰线
+  const firstOfRound = {}, firstOfTurn = {};
+  S.tl.events.forEach(e=>{
+    if (e.kind!=='act') return;
+    if (firstOfRound[e.round] === undefined) firstOfRound[e.round] = e.i;
+    if (firstOfTurn[e.turnG] === undefined) firstOfTurn[e.turnG] = e.i;
+  });
+  const rIdx = new Set(Object.values(firstOfRound));
+  const tIdx = new Set(Object.values(firstOfTurn));
+  let mk = '';
+  S.tl.events.forEach((e,ci)=>{
+    if (e.kind==='pre') return;
+    const cls = (rIdx.has(e.i) ? 'r' : (tIdx.has(e.i) ? 't' : '')) + (ci===S.ci ? ' cur' : '');
+    mk += `<i class="${cls}" style="left:${(ci/(n-1))*100}%"></i>`;
+  });
+  $('#marks').innerHTML = mk;
+  const e = S.tl.events[S.ci];
+  $('#ckLabel').innerHTML = `检查点 <b>${S.ci+1}/${n}</b> · ${esc(e.label)}`;
+  $('#evCount').textContent = `共 ${n} 个检查点`;
+}
+
+function setCi(ci, opts){
+  ci = Math.max(0, Math.min(S.tl.events.length-1, ci));
+  S.ci = ci;
+  SNAP = replayTo(S.tl, ci);
+  renderBoard();
+  renderTimeline();
+  try { history.replaceState(null, '', '#ci=' + ci); } catch(e){ /* file:// 下可能受限 */ }
+  const evEls = document.querySelectorAll('#log .ev');
+  evEls.forEach(el=> el.classList.toggle('cur', +el.dataset.ci===ci));
+  const cur = document.querySelector('#log .ev.cur');
+  if (cur && !(opts&&opts.noScroll)) cur.scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+/* 跳到上/下一个回合的起点。
+   注意两点：
+   1) 战前被动(PRE)事件没有轮次归属(turnG=null)，需按它在动作流中的位置判断方向；
+   2) 当前位置可能落在某个回合的中间，此时「下一个回合」必须是严格更靠后的
+      回合起点，不能退回当前回合的开头。 */
+/* 跳到上/下一个「轮次」的起点（双方各出手一次为一个轮次）。
+   注意两点：
+   1) 战前被动(PRE)事件没有轮次归属(turnG=null)，需按它在动作流中的位置判断方向；
+   2) 当前位置可能落在某个轮次的中间，此时「下一个轮次」必须是严格更靠后的
+      轮次起点，不能退回当前轮次的开头。 */
+function jumpTurn(dir){
+  const acts = S.tl.events.filter(x=>x.kind==='act');
+  if (!acts.length) return;
+  // 每个轮次的起点（动作流中首次出现该 turnG 的那条）
+  const starts = [];
+  const seen = new Set();
+  acts.forEach(x=>{ if (!seen.has(x.turnG)){ seen.add(x.turnG); starts.push(x); } });
+  jumpToBoundary(starts, dir);
+}
+/* 跳到上/下一个「回合」的起点（csn 变化处） */
+function jumpRound(dir){
+  const acts = S.tl.events.filter(x=>x.kind==='act');
+  if (!acts.length) return;
+  const starts = [];
+  const seen = new Set();
+  acts.forEach(x=>{ if (!seen.has(x.round)){ seen.add(x.round); starts.push(x); } });
+  jumpToBoundary(starts, dir);
+}
+function jumpToBoundary(starts, dir){
+  const e = S.tl.events[S.ci];
+  let target = null;
+  if (dir > 0){
+    // 严格晚于当前位置的第一个边界
+    target = starts.find(x=>x.i > e.i) || null;
+  } else {
+    // 严格早于当前位置的最后一个边界
+    const prev = starts.filter(x=>x.i < e.i);
+    target = prev.length ? prev[prev.length-1] : null;
+  }
+  if (target) setCi(target.ci);
+}
+
+/* =========================================================================
+   载入 / 交互
+   ========================================================================= */
+function load(data, name){
+  if (!looksLikeReplay(data)){
+    $('#board').innerHTML = '<div class="err">这个文件看起来不是《奥奇传说》回放。<br>' +
+      '需要包含 <code>br.or.team</code> 与 <code>br.fr[].rl</code> 字段。<br><br>' +
+      '请确认导出的是「对战回放/战报」JSON，而不是其他数据。</div>';
+    $('#log').innerHTML=''; $('#meta').textContent='载入失败';
+    return;
+  }
+  S.tl = buildTimeline(data);
+  precomputeDeltas();
+  S.fileName = name||'';
+  renderMeta(); renderLog();
+  const mm = /(?:^|[#&?])ci=([0-9]+)/.exec(location.hash || '');
+  const start = mm ? Math.max(0, Math.min(S.tl.events.length-1, +mm[1])) : 0;
+  setCi(start, {noScroll:true});
+  document.title = '奥奇传说回放 · ' + (S.tl.meta.scene||'') + (name?(' · '+name):'');
+}
+
+$('#btnLoad').onclick = ()=> $('#file').click();
+$('#file').onchange = ev=>{
+  const f = ev.target.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=>{ try{ load(JSON.parse(rd.result), f.name); }
+                    catch(err){ alert('JSON 解析失败：'+err.message); } };
+  rd.readAsText(f, 'utf-8');
+  ev.target.value = '';
+};
+/* ---------- 左右分栏宽度可拖动 ---------- */
+const SPLIT_MIN = 380, SPLIT_DEFAULT = 640, SPLIT_KEY = 'aoqi_split';
+function applySplit(px){
+  const left = $('#colLeft');
+  const maxw = Math.max(SPLIT_MIN, window.innerWidth - 300);
+  S.split = Math.max(SPLIT_MIN, Math.min(maxw, px|0));
+  // 横向布局下宽度由 flex 决定，写内联宽度会把布局弄坏
+  if (S.layout !== 'h') left.style.width = S.split + 'px';
+  try { localStorage.setItem(SPLIT_KEY, String(S.split)); } catch(e){}
+}
+function initSplit(){
+  let saved = null;
+  try { saved = parseInt(localStorage.getItem(SPLIT_KEY) || '', 10); } catch(e){}
+  applySplit(Number.isFinite(saved) ? saved : SPLIT_DEFAULT);
+}
+initSplit();
+window.addEventListener('resize', ()=>{
+  if (S.layout === 'h'){
+    // 窗口高度变了，保证战报高度仍在合理范围内
+    if (typeof applyHSplit === 'function' && S.hpane) applyHSplit(S.hpane);
+    fitBoards();          // ResizeObserver 也会兜底，这里先立即纠正一次
+  } else {
+    applySplit(S.split);
+  }
+});
+
+/* =========================================================================
+   界面布局：纵向（站位左 / 战报右） ⇄ 横向（双方站位并排 / 战报在下）
+   ========================================================================= */
+const LAYOUT_KEY = 'aoqi_layout', DETACH_KEY = 'aoqi_detach';
+// 横向布局下「文字战报」的高度限制（上下分隔条用）
+const HPANE_MIN = 130, HPANE_KEY = 'aoqi_hpane';
+
+function applyLayout(mode, opts){
+  S.layout = (mode === 'h') ? 'h' : 'v';
+  const app = $('#app'), left = $('#colLeft');
+  app.classList.toggle('layout-h', S.layout === 'h');
+  if (S.layout === 'h'){
+    left.style.width = '';                    // 横向下宽度由 flex 决定
+    // 恢复上次的战报高度（没有则用默认 34vh）
+    if (typeof applyHSplit === 'function'){
+      applyHSplit(S.hpaneInit !== null && S.hpaneInit !== undefined
+        ? S.hpaneInit : Math.round(window.innerHeight * 0.34));
+    }
+  } else if (SNAP){
+    applySplit(S.split);
+  }
+  $('#btnLayout').textContent = S.layout === 'h' ? '布局：横向' : '布局：纵向';
+  $('#boardHint').innerHTML = S.layout === 'h'
+    ? '· 黄框＝出手 · 红框＝受伤 · 对方九宫格已镜像'
+    : '· 黄框＝出手 · 红框＝受伤';  if (!(opts && opts.keep)){
+    try { localStorage.setItem(LAYOUT_KEY, S.layout); } catch(e){}
+  }
+  // 初始化阶段 SNAP 还没建立（尚未 load 回放），此时只切类名，不做渲染
+  if (SNAP) renderBoard();
+}
+
+/* 记住浮动窗的位置与尺寸 */
+function persistWin(){
+  const col = $('#colRight');
+  if (!S.detached) return;
+  try {
+    localStorage.setItem('aoqi_win', JSON.stringify({
+      x: parseInt(col.style.left, 10) || 0,
+      y: parseInt(col.style.top, 10) || 0,
+      w: col.offsetWidth, h: col.offsetHeight
+    }));
+  } catch(e){}
+}
+
+/* 文字战报「拖出」为浮动窗（默认收着，不拖出）。
+   拖出后：#colRight 变成 position:fixed 的浮窗，按住标题栏可移动、拖右下角可缩放。 */
+function applyDetach(on, opts){
+  S.detached = !!on;
+  const col = $('#colRight'), head = $('#logHead');
+  col.classList.toggle('detached', S.detached);
+  const app = $('#app');
+  app.classList.toggle('detached', S.detached);
+  if (S.detached){
+    // 若上次拖动过，恢复其位置与尺寸
+    let w = null;
+    try { w = JSON.parse(localStorage.getItem('aoqi_win') || 'null'); } catch(e){}
+    if (w && Number.isFinite(w.x) && Number.isFinite(w.y)){
+      col.style.left = w.x + 'px'; col.style.top = w.y + 'px';
+      col.style.right = 'auto';    col.style.bottom = 'auto';
+      if (w.w) col.style.width  = Math.max(320, Math.min(window.innerWidth  - 40, w.w)) + 'px';
+      if (w.h) col.style.height = Math.max(180, Math.min(window.innerHeight - 60, w.h)) + 'px';
+    }
+  } else {
+    // 收回：清掉浮窗的内联定位与尺寸，交回 flex 布局
+    col.style.left = col.style.top = col.style.right = col.style.bottom = '';
+    col.style.width = col.style.height = '';
+    applySplit(S.split);
+  }
+  $('#btnDetach').textContent = S.detached ? '收回战报' : '拖出战报';
+  $('#winTools').textContent = S.detached ? '⇲ 收回' : '⧉ 拖出';
+  if (!(opts && opts.keep)){
+    try { localStorage.setItem(DETACH_KEY, S.detached ? '1' : '0'); } catch(e){}
+  }
+  // 布局变化后重新分配棋盘宽度（横向布局尤其需要）
+  if (SNAP){ renderLog(); requestAnimationFrame(fitBoards); }
+}
+
+/* 浮动窗拖动（按住标题栏） */
+(function(){
+  const col = $('#colRight'), head = $('#logHead');
+  let drag = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  head.addEventListener('pointerdown', e=>{
+    if (!S.detached) return;
+    if (e.target.closest && e.target.closest('.tool')) return;   // 点「收回」不触发拖动
+    const r = col.getBoundingClientRect();
+    // 从 right/bottom 定位切到 left/top，避免拖动时跳动
+    col.style.left = r.left + 'px'; col.style.top = r.top + 'px';
+    col.style.right = 'auto'; col.style.bottom = 'auto';
+    drag = true; sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
+    document.body.classList.add('dragging');
+    if (head.setPointerCapture && e.pointerId !== undefined){ try{ head.setPointerCapture(e.pointerId); }catch(err){} }
+    e.preventDefault();
+  });
+  head.addEventListener('pointermove', e=>{
+    if (!drag) return;
+    const w = col.offsetWidth, h = col.offsetHeight;
+    const nx = Math.max(0, Math.min(window.innerWidth  - w, ox + e.clientX - sx));
+    const ny = Math.max(0, Math.min(window.innerHeight - h, oy + e.clientY - sy));
+    col.style.left = nx + 'px'; col.style.top = ny + 'px';
+    e.preventDefault();
+  });
+  const end = ()=>{
+    if (!drag) return;
+    drag = false; document.body.classList.remove('dragging');
+    persistWin();
+  };
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+
+  /* 浮动窗缩放：右下角（自由）/ 右边（宽度）/ 下边（高度） */
+  const RZMIN_W = 300, RZMIN_H = 160;
+  col.querySelectorAll('.rz').forEach(h=>{
+    let on = false, sx = 0, sy = 0, ow = 0, oh = 0, ox = 0, oy = 0, mode = '';
+    h.addEventListener('pointerdown', e=>{
+      if (!S.detached) return;
+      const r = col.getBoundingClientRect();
+      // 切到 left/top 定位，缩放时不会往左下角跳
+      col.style.left = r.left + 'px'; col.style.top = r.top + 'px';
+      col.style.right = 'auto';       col.style.bottom = 'auto';
+      on = true; mode = h.dataset.rz;
+      sx = e.clientX; sy = e.clientY;
+      ow = r.width; oh = r.height; ox = r.left; oy = r.top;
+      document.body.classList.add('dragging');
+      if (h.setPointerCapture && e.pointerId !== undefined){ try{ h.setPointerCapture(e.pointerId); }catch(err){} }
+      e.preventDefault(); e.stopPropagation();
+    });
+    h.addEventListener('pointermove', e=>{
+      if (!on) return;
+      const maxW = window.innerWidth  - ox - 8;
+      const maxH = window.innerHeight - oy - 8;
+      if (mode === 'e' || mode === 'se')
+        col.style.width  = Math.max(RZMIN_W, Math.min(maxW, ow + e.clientX - sx)) + 'px';
+      if (mode === 's' || mode === 'se')
+        col.style.height = Math.max(RZMIN_H, Math.min(maxH, oh + e.clientY - sy)) + 'px';
+      e.preventDefault(); e.stopPropagation();
+    });
+    const stop = ()=>{
+      if (!on) return;
+      on = false; document.body.classList.remove('dragging');
+      persistWin();
+    };
+    h.addEventListener('pointerup', stop);
+    h.addEventListener('pointercancel', stop);
+  });
+})();
+
+/* 布局 / 拖出 的按钮与快捷键 */
+$('#btnLayout').onclick = ()=> applyLayout(S.layout === 'h' ? 'v' : 'h');
+$('#btnDetach').onclick = ()=> applyDetach(!S.detached);
+$('#winTools').onclick  = ()=> applyDetach(!S.detached);
+
+(function initLayout(){
+  let lay = null, det = null;
+  try {
+    lay = localStorage.getItem(LAYOUT_KEY);
+    det = localStorage.getItem(DETACH_KEY);
+  } catch(e){}
+  // URL 参数优先：?layout=h|v   ?detach=0|1   （方便直达某个布局 / 分享链接）
+  const qs = /[?&]layout=([hv])/i.exec(location.search || '');
+  if (qs) lay = qs[1].toLowerCase();
+  const qd = /[?&]detach=([01])/i.exec(location.search || '');
+  if (qd) det = qd[1];
+  applyLayout(lay === 'h' ? 'h' : 'v', {keep:true});     // 默认纵向
+  applyDetach(det === '1', {keep:true});                 // 默认不拖出
+})();
+
+/* ---------- 横向布局：上下分隔条（调「站位」与「文字战报」的高度） ---------- */
+function applyHSplit(px){
+  const app = $('#app');
+  if (S.layout !== 'h') return;
+  let h = px|0;
+  const mainH = app.clientHeight || window.innerHeight;
+  h = Math.max(HPANE_MIN, Math.min(mainH - 200, h));
+  S.hpane = h;
+  app.style.setProperty('--log-h', h + 'px');
+  try { localStorage.setItem(HPANE_KEY, String(h)); } catch(e){}
+}
+(function(){
+  let saved = null;
+  try { saved = parseInt(localStorage.getItem(HPANE_KEY) || '', 10); } catch(e){}
+  S.hpaneInit = Number.isFinite(saved) ? saved : null;
+  const rs = $('#resizerH');
+  let on = false;
+  const down = e=>{
+    on = true; rs.classList.add('on'); document.body.classList.add('resizing-v');
+    if (rs.setPointerCapture && e.pointerId !== undefined){ try{ rs.setPointerCapture(e.pointerId); }catch(err){} }
+    e.preventDefault();
+  };
+  const move = e=>{
+    if (!on) return;
+    // 分隔条上移 → 战报变高，所以用「主区域底部 - 指针位置」
+    const r = $('#app').getBoundingClientRect();
+    applyHSplit(r.bottom - e.clientY);
+    e.preventDefault();
+  };
+  const up = ()=>{
+    if (!on) return;
+    on = false; rs.classList.remove('on'); document.body.classList.remove('resizing-v');
+  };
+  rs.addEventListener('pointerdown', down);
+  rs.addEventListener('pointermove', move);
+  rs.addEventListener('pointerup', up);
+  rs.addEventListener('pointercancel', up);
+  rs.addEventListener('dblclick', ()=> applyHSplit(Math.round(window.innerHeight * 0.34)));
+})();
+
+/* ---------- 宽度自适应 ----------
+   用 ResizeObserver 盯住站位区：窗口缩放、布局切换、战报拖出/收回
+   都会改变它的宽度，而这些都不会触发 window.resize，必须靠观察者才能跟上。
+   （之前只监听 window.resize，于是把浏览器缩小再放大后棋盘一直维持挤的样子。） */
+(function(){
+  const board = $('#board');
+  if (!board || typeof ResizeObserver === 'undefined') return;
+  let raf = 0;
+  S.ro = new ResizeObserver(()=>{
+    if (S.layout !== 'h') return;
+    if (raf) return;
+    raf = requestAnimationFrame(()=>{ raf = 0; fitBoards(); });
+  });
+  S.ro.observe(board);
+})();
+(function(){
+  const rs = $('#resizer');
+  let dragging = false;
+  const onDown = e=>{
+    dragging = true; rs.classList.add('on'); document.body.classList.add('resizing');
+    if (rs.setPointerCapture && e.pointerId !== undefined){ try{ rs.setPointerCapture(e.pointerId); }catch(err){} }
+    e.preventDefault();
+  };
+  const onMove = e=>{
+    if (!dragging) return;
+    const left = $('#colLeft').getBoundingClientRect().left;
+    applySplit(e.clientX - left);
+    e.preventDefault();
+  };
+  const onUp = ()=>{ if(!dragging) return; dragging=false; rs.classList.remove('on');
+    document.body.classList.remove('resizing'); };
+  rs.addEventListener('pointerdown', onDown);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  // 兜底：无 PointerEvent 时用鼠标事件
+  rs.addEventListener('mousedown', e=>{ if(window.PointerEvent) return; onDown(e);
+    const mm = ev=> onMove(ev), mu = ()=>{ onUp();
+      window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
+    window.addEventListener('mousemove', mm); window.addEventListener('mouseup', mu); });
+  rs.addEventListener('dblclick', ()=> applySplit(SPLIT_DEFAULT));
+})();
+$('#btnReset').onclick = ()=> applySplit(SPLIT_DEFAULT);
+
+$('#btnPre').onclick = ()=>{ S.showPre=!S.showPre; $('#btnPre').classList.toggle('on',S.showPre);
+  renderLog(); setCi(S.ci,{noScroll:true}); };
+$('#btnPre').classList.toggle('on', S.showPre);
+$('#btnPlay').onclick = ()=>{
+  S.playing=!S.playing; $('#btnPlay').textContent = S.playing?'⏸ 暂停':'▶ 自动播放';
+  $('#btnPlay').classList.toggle('on', S.playing);
+  if (S.timer){ clearInterval(S.timer); S.timer=null; }
+  if (S.playing){
+    S.timer = setInterval(()=>{
+      if (S.ci >= S.tl.events.length-1){ S.playing=false; $('#btnPlay').textContent='▶ 自动播放';
+        $('#btnPlay').classList.remove('on'); clearInterval(S.timer); S.timer=null; return; }
+      setCi(S.ci+1);
+    }, 1100);
+  }
+};
+$('#range').oninput = e=>{ setCi(+e.target.value, {noScroll:false}); };
+
+$('#log').addEventListener('click', e=>{
+  const ev = e.target.closest('.ev'); if(!ev) return;
+  setCi(+ev.dataset.ci);
+});
+
+document.addEventListener('keydown', e=>{
+  if (e.target.tagName==='INPUT' && e.target.type==='file') return;
+  if (e.key==='ArrowRight'){
+    e.preventDefault();
+    if (e.ctrlKey) jumpRound(1); else if (e.shiftKey) jumpTurn(1); else setCi(S.ci+1);
+  }
+  else if (e.key==='ArrowLeft'){
+    e.preventDefault();
+    if (e.ctrlKey) jumpRound(-1); else if (e.shiftKey) jumpTurn(-1); else setCi(S.ci-1);
+  }
+  else if (e.key==='Home'){ e.preventDefault(); setCi(0); }
+  else if (e.key==='End'){ e.preventDefault(); setCi(S.tl.events.length-1); }
+  else if (e.key===' '){ e.preventDefault(); $('#btnPlay').click(); }
+  else if (e.key==='l' || e.key==='L'){ e.preventDefault(); applyDetach(!S.detached); }
+  else if (e.key==='b' || e.key==='B'){ e.preventDefault(); applyLayout(S.layout==='h'?'v':'h'); }
+  else if (e.key==='Escape'){ if (S.detached) applyDetach(false); }
+});
+
+/* 拖拽载入 */
+['dragenter','dragover'].forEach(t=>document.addEventListener(t,e=>{
+  e.preventDefault(); document.body.classList.add('drag'); }));
+['dragleave','drop'].forEach(t=>document.addEventListener(t,e=>{
+  e.preventDefault(); if(t==='drop'||e.target===document.documentElement) document.body.classList.remove('drag'); }));
+document.addEventListener('drop', e=>{
+  const f = e.dataTransfer.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=>{ try{ load(JSON.parse(rd.result), f.name); }
+                    catch(err){ alert('JSON 解析失败：'+err.message); } };
+  rd.readAsText(f,'utf-8');
+});
+
+/* ---------- 启动：优先用内嵌回放 ---------- */
+(function boot(){
+  const raw = document.getElementById('embedReplay').textContent.trim();
+  // 占位符分片拼接：保证完整占位符在模板中只出现一次（仅内嵌数据标签里那一处）
+  const PLACEHOLDER = '__AOQI_EMBED' + '_PAYLOAD__';
+  window.__bootInfo = 'boot: rawLen=' + raw.length + ' isPlaceholder=' + (raw === PLACEHOLDER);
+  if (raw && raw !== PLACEHOLDER){
+    try {
+      const data = JSON.parse(raw);
+      window.__tlLoaded = true;
+      load(data, '内嵌回放');
+      window.__bootInfo += ' loaded';
+      return;
+    } catch(e){
+      window.__bootInfo += ' parseFail:' + e.message;
+      console.warn('内嵌回放解析失败', e);
+    }
+  } else {
+    window.__bootInfo += ' noEmbed';
+  }
+  if (window.__tlLoaded) return;
+  $('#board').innerHTML = '<div class="err">还没有载入回放。<br><br>' +
+    '① 点右上角 <code>载入其他回放…</code> 选择 JSON 文件；<br>' +
+    '② 或直接把回放 JSON 文件拖到本页面任意位置。</div>';
+  $('#meta').textContent = '等待载入 · ' + window.__bootInfo;
+})();
+</script>
+</body>
+</html>
